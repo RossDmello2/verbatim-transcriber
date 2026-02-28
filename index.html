@@ -837,6 +837,33 @@
       }
     }
 
+    /* ─── Undo Indicator ─────────────────────────────────────── */
+    .undo-indicator {
+      margin-top: 12px;
+      padding: 10px 16px;
+      border: 1px solid rgba(56, 217, 169, 0.3);
+      border-radius: var(--radius);
+      background: rgba(56, 217, 169, 0.06);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      color: var(--accent3);
+      animation: fadeUp 0.3s ease both;
+    }
+
+    .undo-indicator kbd {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 3px;
+      padding: 1px 6px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--accent3);
+    }
+
     /* ─── Not Supported ──────────────────────────────────────── */
     .not-supported {
       text-align: center;
@@ -1108,6 +1135,11 @@
       <div class="shortcut"><kbd>Esc</kbd> Clear interim</div>
       <div class="shortcut"><kbd>Ctrl + Del</kbd> Clear all</div>
     </div>
+
+    <div class="undo-indicator" id="undoIndicator" style="display:none;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+      Last copied text is restorable — press <kbd>Ctrl+Z</kbd> to recover it
+    </div>
   `;
 
       // ─── State ────────────────────────────────────────────────
@@ -1116,12 +1148,12 @@
       let sessionStart = null;
       let timerInterval = null;
       let audioCtx, analyser, source, animFrame;
-      let lastEndTime = 0;         // for paragraph detection
-      let undoBuffer = '';
+      let lastEndTime = 0;
+      let undoBuffer = sessionStorage.getItem('vt_undo') || '';  // persists across refresh
       let currentView = 'raw';
       let noSpeechTimer = null;
       let restartTimeout = null;
-      let confirmedText = '';      // finalized transcript text (without live interim)
+      let confirmedText = '';
 
       // ─── Elements ─────────────────────────────────────────────
       const micBtn = document.getElementById('micBtn');
@@ -1141,6 +1173,22 @@
       const canvas = document.getElementById('waveCanvas');
       const ctx2d = canvas.getContext('2d');
       const waveOverlay = document.getElementById('waveOverlay');
+      const undoIndicator = document.getElementById('undoIndicator');
+
+      // ─── Undo Buffer Helpers ──────────────────────────────────
+      function saveUndo(text) {
+        undoBuffer = text;
+        sessionStorage.setItem('vt_undo', text);
+        undoIndicator.style.display = text ? 'flex' : 'none';
+      }
+      function clearUndo() {
+        undoBuffer = '';
+        sessionStorage.removeItem('vt_undo');
+        undoIndicator.style.display = 'none';
+      }
+
+      // Show undo indicator if there's a saved buffer on load
+      if (undoBuffer) undoIndicator.style.display = 'flex';
 
       // ─── Speech Recognition ───────────────────────────────────
       const recognition = new SR();
@@ -1470,12 +1518,10 @@
       }
 
       document.getElementById('copyBtn').addEventListener('click', () => {
-        // Capture the full text (confirmed + any live interim) BEFORE clearing
         const text = transcript.value.trim();
         if (!text) { toast('Nothing to copy yet', 'warning'); return; }
         copyToClipboard(text, () => {
-          // Clear AFTER successful copy
-          undoBuffer = transcript.value;
+          saveUndo(transcript.value);   // persist to sessionStorage
           transcript.value = '';
           confirmedText = '';
           segments = [];
@@ -1485,7 +1531,7 @@
           const btn = document.getElementById('copyBtn');
           btn.classList.add('success');
           setTimeout(() => btn.classList.remove('success'), 1600);
-          toast('Copied & cleared — Ctrl+Z to undo', 'success');
+          toast('Copied & cleared — Ctrl+Z to recover anytime', 'success');
         });
       });
 
@@ -1504,7 +1550,7 @@
       document.getElementById('clearBtn').addEventListener('click', () => {
         const text = transcript.value.trim();
         if (!text && !segments.length) { toast('Already empty', 'info'); return; }
-        undoBuffer = transcript.value;
+        saveUndo(transcript.value);
         transcript.value = '';
         confirmedText = '';
         segments = [];
@@ -1513,7 +1559,7 @@
         durStat.textContent = '0:00 duration';
         timerEl.textContent = '00:00';
         updateStats();
-        toast('Cleared — Ctrl+Z to undo', 'info');
+        toast('Cleared — Ctrl+Z to recover anytime', 'info');
       });
 
       transcript.addEventListener('input', updateStats);
@@ -1536,14 +1582,14 @@
           const text = transcript.value.trim();
           if (text) {
             copyToClipboard(text, () => {
-              undoBuffer = transcript.value;
+              saveUndo(transcript.value);
               transcript.value = '';
               confirmedText = '';
               segments = [];
               segView.innerHTML = '';
               segCount.textContent = '0 segments';
               updateStats();
-              toast('Copied & cleared — Ctrl+Z to undo', 'success');
+              toast('Copied & cleared — Ctrl+Z to recover anytime', 'success');
             });
           }
         }
@@ -1557,14 +1603,16 @@
           e.preventDefault();
           document.getElementById('clearBtn').click();
         }
-        // Ctrl+Z: undo clear
+        // Ctrl+Z: undo clear — restores last copied/cleared text, always available
         if (e.ctrlKey && e.key === 'z' && tag !== 'textarea') {
           if (undoBuffer) {
             transcript.value = undoBuffer;
             confirmedText = undoBuffer;
-            undoBuffer = '';
+            // DON'T clear undoBuffer — keep it so user can restore again if needed
             updateStats();
-            toast('Undo restore', 'success');
+            toast('Recovered last copied text', 'success');
+          } else {
+            toast('Nothing to recover', 'info');
           }
         }
       });
