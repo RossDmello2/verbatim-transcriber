@@ -1154,12 +1154,16 @@
         let interim = '';
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const res = e.results[i];
-          const text = res[0].transcript;
+          const text = res[0].transcript.trim();
           const conf = res[0].confidence;
           if (res.isFinal) {
-            addSegment(text.trim(), conf);
-            appendToTranscript(text.trim());
-            confirmedText = transcript.value;   // lock in the final text
+            if (!text) continue;
+            // KEY FIX: reset to confirmed-only BEFORE appending final result
+            // prevents the interim text already displayed from being duplicated
+            transcript.value = confirmedText;
+            addSegment(text, conf);
+            appendToTranscript(text);
+            confirmedText = transcript.value;
             interimEl.textContent = '';
             interimEl.classList.remove('idle-hint');
             lastEndTime = Date.now();
@@ -1168,10 +1172,9 @@
           }
         }
         if (interim) {
-          // Show live interim text in the small box
           interimEl.textContent = interim;
           interimEl.classList.remove('idle-hint');
-          // ALSO stream it live into the main transcript box
+          // Stream live into transcript, always built from confirmed base
           const sep = confirmedText && !confirmedText.endsWith('\n') ? ' ' : '';
           transcript.value = confirmedText + sep + interim;
           transcript.scrollTop = transcript.scrollHeight;
@@ -1200,7 +1203,7 @@
 
       recognition.onend = () => {
         if (isRecording && !restartTimeout) {
-          scheduleRestart(150);
+          scheduleRestart(50);
         }
       };
 
@@ -1317,7 +1320,7 @@
         stopAudio();
       }
 
-      function scheduleRestart(delay = 200) {
+      function scheduleRestart(delay = 50) {
         clearTimeout(restartTimeout);
         restartTimeout = setTimeout(() => {
           restartTimeout = null;
@@ -1438,10 +1441,40 @@
         }
       });
 
+      function copyToClipboard(text, onSuccess) {
+        // Most reliable approach: always try both methods
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
+            legacyCopy(text, onSuccess);
+          });
+        } else {
+          legacyCopy(text, onSuccess);
+        }
+      }
+
+      function legacyCopy(text, onSuccess) {
+        // Create a temp textarea OUTSIDE the DOM flow so clearing transcript doesn't affect it
+        const el = document.createElement('textarea');
+        el.value = text;
+        el.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0;';
+        document.body.appendChild(el);
+        el.focus();
+        el.select();
+        try {
+          document.execCommand('copy');
+          onSuccess();
+        } catch (e) {
+          toast('Copy failed — please use Ctrl+A then Ctrl+C manually', 'error');
+        }
+        document.body.removeChild(el);
+      }
+
       document.getElementById('copyBtn').addEventListener('click', () => {
-        const text = (confirmedText || transcript.value).trim();
+        // Capture the full text (confirmed + any live interim) BEFORE clearing
+        const text = transcript.value.trim();
         if (!text) { toast('Nothing to copy yet', 'warning'); return; }
-        const doClear = () => {
+        copyToClipboard(text, () => {
+          // Clear AFTER successful copy
           undoBuffer = transcript.value;
           transcript.value = '';
           confirmedText = '';
@@ -1449,18 +1482,10 @@
           segView.innerHTML = '';
           segCount.textContent = '0 segments';
           updateStats();
-        };
-        navigator.clipboard.writeText(text).then(() => {
           const btn = document.getElementById('copyBtn');
           btn.classList.add('success');
           setTimeout(() => btn.classList.remove('success'), 1600);
-          doClear();
           toast('Copied & cleared — Ctrl+Z to undo', 'success');
-        }).catch(() => {
-          transcript.select();
-          document.execCommand('copy');
-          doClear();
-          toast('Copied & cleared!', 'success');
         });
       });
 
@@ -1508,9 +1533,9 @@
         // Ctrl+C: copy (when textarea not focused)
         if (e.ctrlKey && e.key === 'c' && tag !== 'textarea') {
           e.preventDefault();
-          const text = (confirmedText || transcript.value).trim();
+          const text = transcript.value.trim();
           if (text) {
-            navigator.clipboard.writeText(text).then(() => {
+            copyToClipboard(text, () => {
               undoBuffer = transcript.value;
               transcript.value = '';
               confirmedText = '';
